@@ -1,4 +1,4 @@
 [package]
 authors = ["Jorge Aparicio <japaricious@gmail.com>"]
-name = "heapless-futures"
+name = "futuro"
 version = "0.1.0"
