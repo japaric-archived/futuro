@@ -13,6 +13,17 @@ pub enum Async<T> {
 }
 
 impl<T> Async<T> {
+    pub fn is_not_ready(&self) -> bool {
+        match *self {
+            Async::NotReady => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        !self.is_not_ready()
+    }
+
     pub fn map<F, U>(self, f: F) -> Async<U>
         where F: FnOnce(T) -> U
     {
@@ -30,7 +41,7 @@ pub trait Future {
 
     fn and_then<F, B>(self, f: F) -> AndThen<Self, B, F>
         where F: FnOnce(Self::Item) -> B,
-              B: Future<Item = Self::Item>,
+              B: Future,
               Self: Sized
     {
         AndThen::First(self, f)
@@ -59,6 +70,13 @@ pub trait Future {
         }
     }
 
+    fn select<B>(self, other: B) -> Select<Self, B>
+        where B: Future<Item = Self::Item>,
+              Self: Sized
+    {
+        Select { state: Some((self, other)) }
+    }
+
     fn wait(mut self) -> Self::Item
         where Self: Sized
     {
@@ -80,11 +98,11 @@ pub enum AndThen<A, B, F> {
 impl<A, B, F> Future for AndThen<A, B, F>
     where A: Future,
           F: FnOnce(A::Item) -> B,
-          B: Future<Item = A::Item>
+          B: Future
 {
-    type Item = A::Item;
+    type Item = B::Item;
 
-    fn poll(&mut self) -> Async<A::Item> {
+    fn poll(&mut self) -> Async<B::Item> {
         let state = mem::replace(self, AndThen::Done);
 
         let mut b = match state {
@@ -158,7 +176,10 @@ impl<A, B> Future for Join<A, B>
         match state {
             Join::BothRunning(mut a, mut b) => {
                 match (a.poll(), b.poll()) {
-                    (Async::NotReady, Async::NotReady) => Async::NotReady,
+                    (Async::NotReady, Async::NotReady) => {
+                        *self = Join::BothRunning(a, b);
+                        Async::NotReady
+                    }
                     (Async::NotReady, Async::Ready(b)) => {
                         *self = Join::SecondDone(a, b);
                         Async::NotReady
@@ -216,6 +237,75 @@ impl<A, F, B> Future for Map<A, F>
                 self.f = Some(f);
                 Async::NotReady
             }
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct Select<A, B> {
+    state: Option<(A, B)>,
+}
+
+impl<A, B> Future for Select<A, B>
+    where A: Future,
+          B: Future<Item = A::Item>
+{
+    type Item = (A::Item, SelectNext<A, B>);
+
+    fn poll(&mut self) -> Async<Self::Item> {
+        let (mut a, mut b) =
+            self.state.take().expect("cannot poll `select` twice");
+
+        match a.poll() {
+            Async::Ready(a) => Async::Ready((a, SelectNext::B(b))),
+            Async::NotReady => {
+                match b.poll() {
+                    Async::Ready(b) => Async::Ready((b, SelectNext::A(a))),
+                    Async::NotReady => {
+                        self.state = Some((a, b));
+                        Async::NotReady
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub enum SelectNext<A, B> {
+    A(A),
+    B(B),
+    Done,
+}
+
+impl<A, B> Future for SelectNext<A, B>
+    where A: Future,
+          B: Future<Item = A::Item>
+{
+    type Item = A::Item;
+
+    fn poll(&mut self) -> Async<A::Item> {
+        let state = mem::replace(self, SelectNext::Done);
+
+        match state {
+            SelectNext::A(mut a) => {
+                let t = a.poll();
+
+                if t.is_not_ready() {
+                    *self = SelectNext::A(a);
+                }
+
+                t
+            }
+            SelectNext::B(mut b) => {
+                let t = b.poll();
+
+                if t.is_not_ready() {
+                    *self = SelectNext::B(b);
+                }
+
+                t
+            }
+            SelectNext::Done => panic!("cannot poll `SelectNext` twice"),
         }
     }
 }

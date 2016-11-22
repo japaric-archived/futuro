@@ -17,6 +17,16 @@ pub trait InfiniteStream {
         }
     }
 
+    fn merge<S>(self, other: S) -> Merge<Self, S>
+        where S: InfiniteStream,
+              Self: Sized
+    {
+        Merge {
+            a: self,
+            b: other,
+        }
+    }
+
     fn map<B, F>(self, f: F) -> Map<Self, F>
         where F: FnMut(Self::Item) -> B,
               Self: Sized
@@ -107,4 +117,38 @@ impl<S, F, B> InfiniteStream for Map<S, F>
     fn poll(&mut self) -> Async<Self::Item> {
         self.stream.poll().map(|t| (self.f)(t))
     }
+}
+
+#[must_use = "streams do nothing unless polled"]
+pub struct Merge<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A, B> InfiniteStream for Merge<A, B>
+    where A: InfiniteStream,
+          B: InfiniteStream
+{
+    type Item = MergedItem<A::Item, B::Item>;
+
+    fn poll(&mut self) -> Async<Self::Item> {
+        match (self.a.poll(), self.b.poll()) {
+            (Async::NotReady, Async::NotReady) => Async::NotReady,
+            (Async::NotReady, Async::Ready(b)) => {
+                Async::Ready(MergedItem::Second(b))
+            }
+            (Async::Ready(a), Async::NotReady) => {
+                Async::Ready(MergedItem::First(a))
+            }
+            (Async::Ready(a), Async::Ready(b)) => {
+                Async::Ready(MergedItem::Both(a, b))
+            }
+        }
+    }
+}
+
+pub enum MergedItem<A, B> {
+    First(A),
+    Second(B),
+    Both(A, B),
 }
