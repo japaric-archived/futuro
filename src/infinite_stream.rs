@@ -5,6 +5,8 @@ use {Async, InfiniteIterator, Future};
 pub trait InfiniteStream {
     type Item;
 
+    fn poll(&mut self) -> Async<Self::Item>;
+
     fn and_then<B, F>(self, f: F) -> AndThen<Self, F, B>
         where B: Future,
               F: FnMut(Self::Item) -> B,
@@ -37,8 +39,6 @@ pub trait InfiniteStream {
         }
     }
 
-    fn poll(&mut self) -> Async<Self::Item>;
-
     fn wait(self) -> InfiniteWait<Self>
         where Self: Sized
     {
@@ -46,7 +46,7 @@ pub trait InfiniteStream {
     }
 }
 
-#[must_use = "futures do nothing unless polled"]
+#[must_use = "streams do nothing unless polled"]
 pub struct AndThen<S, F, B>
     where S: InfiniteStream,
           F: FnMut(S::Item) -> B
@@ -102,7 +102,7 @@ impl<S> InfiniteIterator for InfiniteWait<S>
     }
 }
 
-#[must_use = "futures do nothing unless polled"]
+#[must_use = "streams do nothing unless polled"]
 pub struct Map<S, F> {
     stream: S,
     f: F,
